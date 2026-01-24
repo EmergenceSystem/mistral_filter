@@ -1,0 +1,15 @@
+{application, mistral_filter, [
+    {description, "em_filter example for Mistral"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {mistral_filter_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        em_filter
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/EmergenceSystem/mistral_filter"}]}
+]}.
