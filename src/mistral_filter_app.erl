@@ -1,51 +1,59 @@
+%%%-------------------------------------------------------------------
+%%% @doc Mistral AI filter.
+%%%
+%%% Sends the query directly to Mistral API and returns the answer
+%%% as a single embryo map.
+%%% @end
+%%%-------------------------------------------------------------------
 -module(mistral_filter_app).
 -behaviour(application).
 
 -export([start/2, stop/1]).
 -export([handle/1]).
 
-start(_StartType, _StartArgs) ->
-    {ok, Port} = em_filter:find_port(),
-    FilterUrl = io_lib:format("http://localhost:~p/query", [Port]),
-    io:format("Mistral filter registered: ~s~n", [lists:flatten(FilterUrl)]),
-    em_filter:register_filter(lists:flatten(FilterUrl)),
-    em_filter_sup:start_link(mistral_filter, ?MODULE, Port).
+%%====================================================================
+%% Application behaviour
+%%====================================================================
 
-stop(_State) -> ok.
+start(_StartType, _StartArgs) ->
+    em_filter:start_filter(mistral_filter, ?MODULE).
+
+stop(_State) ->
+    em_filter:stop_filter(mistral_filter).
+
+%%====================================================================
+%% Filter handler — returns a list of embryo maps
+%%====================================================================
 
 handle(Body) when is_binary(Body) ->
-    handle(binary_to_list(Body));
-handle(Body) when is_list(Body) ->
-    io:format("Mistral Filter received body: ~p~n", [Body]),
-    EmbryoList = generate_embryo_list(list_to_binary(Body)),
-    Response = #{embryo_list => EmbryoList},
-    jsone:encode(Response);
+    generate_embryo_list(Body);
 handle(_) ->
-    jsone:encode(#{error => <<"Invalid request body">>}).
+    [].
+
+%%====================================================================
+%% Search and processing
+%%====================================================================
 
 generate_embryo_list(JsonBinary) ->
-    case jsone:decode(JsonBinary, [{keys, atom}]) of
-        SearchMap when is_map(SearchMap) ->
-            Value = maps:get(value, SearchMap, <<"">>),
-            generate_embryos(binary_to_list(Value));
-        _ ->
-            generate_embryos("")
+    Value = extract_value(JsonBinary),
+    generate_embryos(Value).
+
+extract_value(JsonBinary) ->
+    try json:decode(JsonBinary) of
+        Map when is_map(Map) ->
+            binary_to_list(maps:get(<<"value">>, Map, <<"">>));
+        _ -> ""
+    catch
+        _:_ -> ""
     end.
 
 generate_embryos("") -> [];
 generate_embryos(Value) ->
-    io:format("Mistral direct question: ~s~n", [Value]),
-    
-    %% Appel DIRECT à Mistral (sans résumé)
     ValueBin = unicode:characters_to_binary(Value, unicode, utf8),
-    Config = mistral_handler:get_env_config(),
-    
+    Config   = mistral_handler:get_env_config(),
     case mistral_handler:generate(ValueBin, Config) of
         {ok, AnswerBin} ->
-            io:format("✅ Mistral answer: ~s~n", [AnswerBin]),
-            [#{properties => #{resume => AnswerBin}}];
-        {error, Reason} ->
-            io:format("❌ Mistral error: ~p~n", [Reason]),
+            [#{<<"properties">> => #{<<"resume">> => AnswerBin}}];
+        _ ->
             []
     end.
-
