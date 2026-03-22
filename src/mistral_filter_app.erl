@@ -1,43 +1,57 @@
 %%%-------------------------------------------------------------------
 %%% @doc Mistral AI agent.
 %%%
-%%% Sends the query to the Mistral API and returns the answer
-%%% as a single embryo map.
+%%% Sends the query to the Mistral API and returns the answer as a
+%%% single embryo map.
 %%%
 %%% Maintains a conversation memory (list of {query, answer} pairs)
 %%% so the LLM can reference prior exchanges in its context window.
-%%% Mistral natively supports multi-turn via its messages API, so
-%%% history maps directly to {role: user/assistant} pairs.
+%%% Memory is kept in ETS so it survives worker restarts.
 %%%
-%%% Handler contract: `handle/2' (Body, Memory) -> {RawList, NewMemory}.
-%%% Memory schema: `#{history => [{QueryBin, AnswerBin}]}' (newest last).
+%%% === Capability cascade ===
+%%%
+%%%   base_capabilities/0 extends em_filter:base_capabilities().
+%%%
+%%% Handler contract: handle/2 (Body, Memory) -> {RawList, NewMemory}.
+%%% Memory schema: #{history => [{QueryBin, AnswerBin}]} (newest last).
 %%% @end
 %%%-------------------------------------------------------------------
 -module(mistral_filter_app).
 -behaviour(application).
+
 -export([start/2, stop/1]).
--export([handle/2]).
--define(CAPABILITIES, [
-    <<"mistral">>,
-    <<"llm">>,
-    <<"summarize">>,
-    <<"generate">>,
-    <<"cloud_ai">>
-]).
+-export([handle/2, base_capabilities/0]).
+
 -define(MAX_HISTORY, 5).
+
+%%====================================================================
+%% Capability cascade
+%%====================================================================
+
+-spec base_capabilities() -> [binary()].
+base_capabilities() ->
+    em_filter:base_capabilities() ++ [<<"mistral">>, <<"llm">>,
+                                      <<"summarize">>, <<"generate">>,
+                                      <<"cloud_ai">>].
+
 %%====================================================================
 %% Application behaviour
 %%====================================================================
+
 start(_StartType, _StartArgs) ->
     em_filter:start_agent(mistral_filter, ?MODULE, #{
-        capabilities => ?CAPABILITIES,
+        capabilities => base_capabilities(),
         memory       => ets
-    }).
+    }),
+    {ok, self()}.
+
 stop(_State) ->
     em_filter:stop_agent(mistral_filter).
+
 %%====================================================================
 %% Agent handler
 %%====================================================================
+
 handle(Body, Memory) when is_binary(Body) ->
     Value = extract_value(Body),
     case Value of
@@ -59,11 +73,14 @@ handle(Body, Memory) when is_binary(Body) ->
                     {[], Memory}
             end
     end;
+
 handle(_Body, Memory) ->
     {[], Memory}.
+
 %%====================================================================
 %% Internal helpers
 %%====================================================================
+
 history_to_messages(History, CurrentQuery) ->
     HistoryMessages = lists:flatmap(fun({Q, A}) ->
         [
@@ -76,7 +93,8 @@ history_to_messages(History, CurrentQuery) ->
 extract_value(JsonBinary) ->
     try json:decode(JsonBinary) of
         Map when is_map(Map) ->
-            binary_to_list(maps:get(<<"value">>, Map, <<"">>));
+            binary_to_list(maps:get(<<"value">>, Map,
+                maps:get(<<"query">>, Map, <<"">>)));
         _ ->
             binary_to_list(JsonBinary)
     catch
